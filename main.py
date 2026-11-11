@@ -1,27 +1,61 @@
 import os
-import telebot
-import google.generativeai as genai
+import logging
+from telegram import Update
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
+from google import genai
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# Konfigurasi Logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-bot = telebot.TeleBot(TELEGRAM_TOKEN)
+# Inisialisasi klien Gemini
+client = genai.Client(api_key=GEMINI_API_KEY)
+MODEL_NAME = 'gemini-2.5-flash'
 
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    bot.reply_to(message, "Halo! Bot AI sudah aktif dan siap menjawab pertanyaan di grup. Cukup mention (@nama_bot) atau reply pesan saya.")
+# Kamus untuk menyimpan riwayat chat pengguna
+chat_sessions = {}
 
-@bot.message_handler(func=lambda message: True)
-def handle_message(message):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        return
+
+    user_id = update.message.from_user.id
+    user_message = update.message.text
+
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id, 
+        action="typing"
+    )
+
     try:
-        user_text = message.text
-        response = model.generate_content(user_text)
-        bot.reply_to(message, response.text)
-    except Exception as e:
-        bot.reply_to(message, f"Maaf, terjadi kesalahan: {e}")
+        if user_id not in chat_sessions:
+            chat_sessions[user_id] = client.chats.create(model=MODEL_NAME)
+        
+        chat = chat_sessions[user_id]
+        response = chat.send_message(user_message)
+        bot_reply = response.text
 
-print("Bot Telegram AI sedang berjalan...")
-bot.infinity_polling()
+        await update.message.reply_text(bot_reply)
+
+    except Exception as e:
+        logging.error(f"Error saat memproses pesan: {e}")
+        await update.message.reply_text("Maaf, terjadi sedikit kendala saat menghubungi AI. Silakan coba sebentar lagi ya!")
+
+def main():
+    if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
+        logging.error("TELEGRAM_TOKEN atau GEMINI_API_KEY belum disetel!")
+        return
+
+    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+
+    logging.info("Bot Telegram AI berhasil dijalankan!")
+    application.run_polling()
+
+if __name__ == '__main__':
+    main()
